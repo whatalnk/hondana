@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"text/template"
+
+	"rsc.io/pdf"
 )
 
 type Config struct {
@@ -21,7 +23,10 @@ type Shelf struct {
 }
 
 type Book struct {
-	Path string
+	Title   string
+	Author  string
+	NumPage int
+	File    string
 }
 
 func visit(fileList *[]Book) filepath.WalkFunc {
@@ -29,8 +34,26 @@ func visit(fileList *[]Book) filepath.WalkFunc {
 		if info.IsDir() || filepath.Ext(path) != ".pdf" {
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
-		*fileList = append(*fileList, Book{rel})
+		f, _ := pdf.Open(path)
+		var title, author string
+		var numPage int
+		rel, _ := filepath.Rel(root, path)
+		defer func() {
+			if r := recover(); r != nil {
+				title = filepath.Base(path)
+				*fileList = append(*fileList, Book{title, author, numPage, rel})
+				return
+			}
+		}()
+		numPage = f.NumPage()
+		pdfInfo := f.Trailer().Key("Info")
+		title = pdfInfo.Key("Title").Text()
+		if title == "" {
+			title = filepath.Base(path)
+		}
+		author = pdfInfo.Key("Author").Text()
+
+		*fileList = append(*fileList, Book{title, author, numPage, rel})
 		return nil
 	}
 }

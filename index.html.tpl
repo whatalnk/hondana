@@ -7,10 +7,11 @@
 </head>
 
 <body>
-  <h1>List of PDF Books in {{.Root}}</h1>
+  {{$root := .Root}}
+  <h1>List of PDF Books in {{$root}}</h1>
   <ul>
     {{range .Books}}
-    <li>{{.Path}}</li>
+    <li><a href="file:///{{$root}}/{{.File}}">{{.Title}}</a>, {{.Author}}, {{.NumPage}} page </li>
     {{end}}
   </ul>
 </body>
