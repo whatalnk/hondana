@@ -12,6 +12,8 @@ import (
 	"log"
 	"net/http"
 
+	"os/user"
+
 	"rsc.io/pdf"
 )
 
@@ -19,7 +21,34 @@ type Config struct {
 	Root string
 }
 
-var root string
+var config Config
+
+func getConfig() Config {
+	usr, _ := user.Current()
+	home := usr.HomeDir
+	configdir := filepath.Join(home, ".hondana")
+	configfile := filepath.Join(configdir, "config.json")
+	if _, err := os.Stat(configfile); err != nil {
+		if _, err := os.Stat(configdir); err != nil {
+			if err := os.Mkdir(configdir, 0777); err != nil {
+				log.Fatal(fmt.Sprintf("Cannot create %s\n", configdir), err)
+			}
+		}
+		f, err := os.Create(configfile)
+		if err != nil {
+			log.Fatal(fmt.Sprintf("Cannot create %s\n", configfile), err)
+		}
+		data, _ := json.Marshal(config)
+		if _, err := f.Write(data); err != nil {
+			log.Fatal(fmt.Sprint("Cannot write settings"), err)
+		}
+		return config
+	}
+	f, _ := ioutil.ReadFile(configfile)
+	json.Unmarshal(f, &config)
+	return config
+}
+
 
 type Shelf struct {
 	Root  string
@@ -41,7 +70,7 @@ func visit(fileList *[]Book) filepath.WalkFunc {
 		f, _ := pdf.Open(path)
 		var title, author string
 		var numPage int
-		rel, _ := filepath.Rel(root, path)
+		rel, _ := filepath.Rel(config.Root, path)
 		defer func() {
 			if r := recover(); r != nil {
 				title = filepath.Base(path)
@@ -79,20 +108,36 @@ func (t *templateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
-	f, _ := ioutil.ReadFile("config.json")
-	var config Config
-	json.Unmarshal(f, &config)
-	root = config.Root
+type configHandler struct {
+	once     sync.Once
+	filename string
+	templ    *template.Template
+	config   Config
+}
 
-	fileList := []Book{}
-	err := filepath.Walk(root, visit(&fileList))
+func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c.once.Do(func() {
+		c.templ = template.Must(template.ParseFiles(filepath.Join("templates", c.filename)))
+	})
+	err := c.templ.Execute(w, c.config)
 	if err != nil {
-		log.Fatal("filepath.Walk: ", err)
+		log.Fatal("template.Execute: ", err)
 	}
 
+}
+
+func main() {
+	config = getConfig()
+	fileList := []Book{}
+	if config.Root != "" {
+		err := filepath.Walk(config.Root, visit(&fileList))
+		if err != nil {
+			log.Fatal("filepath.Walk: ", err)
+		}
+	}
 	fmt.Println("accepting connections at http://localhost:8080")
-	http.Handle("/", &templateHandler{filename: "index.html", data: Shelf{root, fileList}})
+	http.Handle("/", &templateHandler{filename: "index.html", data: Shelf{config.Root, fileList}})
+	http.Handle("/settings", &configHandler{filename: "settings.html", config: config})
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
