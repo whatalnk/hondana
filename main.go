@@ -3,10 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"text/template"
+	"sync"
+
+	"log"
+	"net/http"
 
 	"rsc.io/pdf"
 )
@@ -58,19 +62,38 @@ func visit(fileList *[]Book) filepath.WalkFunc {
 	}
 }
 
+type templateHandler struct {
+	once     sync.Once
+	filename string
+	templ    *template.Template
+	data     Shelf
+}
+
+func (t *templateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	t.once.Do(func() {
+		t.templ = template.Must(template.ParseFiles(filepath.Join("templates", t.filename)))
+	})
+	err := t.templ.Execute(w, t.data)
+	if err != nil {
+		log.Fatal("template.Execute: ", err)
+	}
+}
+
 func main() {
 	f, _ := ioutil.ReadFile("config.json")
 	var config Config
 	json.Unmarshal(f, &config)
 	root = config.Root
+
 	fileList := []Book{}
 	err := filepath.Walk(root, visit(&fileList))
 	if err != nil {
-		fmt.Println(err.Error())
+		log.Fatal("filepath.Walk: ", err)
 	}
-	t := template.Must(template.ParseFiles("index.html.tpl"))
-	err = t.Execute(os.Stdout, Shelf{root, fileList})
-	if err != nil {
-		fmt.Println(err.Error())
+
+	fmt.Println("accepting connections at http://localhost:8080")
+	http.Handle("/", &templateHandler{filename: "index.html", data: Shelf{root, fileList}})
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatal("ListenAndServe: ", err)
 	}
 }
