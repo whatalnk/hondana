@@ -18,6 +18,7 @@ import (
 )
 
 type Config struct {
+	path string
 	Root string
 }
 
@@ -34,6 +35,7 @@ func getConfig() Config {
 				log.Fatal(fmt.Sprintf("Cannot create %s\n", configdir), err)
 			}
 		}
+		config.path = configfile
 		f, err := os.Create(configfile)
 		if err != nil {
 			log.Fatal(fmt.Sprintf("Cannot create %s\n", configfile), err)
@@ -42,10 +44,12 @@ func getConfig() Config {
 		if _, err := f.Write(data); err != nil {
 			log.Fatal(fmt.Sprint("Cannot write settings"), err)
 		}
+
 		return config
 	}
 	f, _ := ioutil.ReadFile(configfile)
 	json.Unmarshal(f, &config)
+	config.path = configfile
 	return config
 }
 
@@ -116,6 +120,21 @@ type configHandler struct {
 }
 
 func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		r.ParseForm()
+		v := r.Form["root"][0]
+		c.config.Root = v
+		data, _ := json.Marshal(c.config)
+		f, err := os.Create(c.config.path)
+		if err != nil {
+			log.Fatal(fmt.Sprintf("Cannot open %s\n", c.config.path), err)
+		}
+		if _, err := f.Write(data); err != nil {
+			log.Fatal(fmt.Sprint("Cannot write settings"), err)
+		}
+		defer f.Close()
+		log.Printf("Update Root to: %s", v)
+	}
 	c.once.Do(func() {
 		c.templ = template.Must(template.ParseFiles(filepath.Join("templates", c.filename)))
 	})
