@@ -5,16 +5,13 @@ import (
 	"fmt"
 	"html/template"
 	"io/ioutil"
-	"os"
-	"path/filepath"
-	"sync"
-
 	"log"
 	"net/http"
-
+	"os"
 	"os/user"
-
+	"path/filepath"
 	"strconv"
+	"sync"
 
 	"rsc.io/pdf"
 )
