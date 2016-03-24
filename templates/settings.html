@@ -10,11 +10,19 @@
   <h1>Settings</h1>
   <dl>
     <dt>Roots</dt>
-    <dd>{{.Root}}</dd>
+    {{range $index, $element := .Roots}}
+    <dd>
+      <form action="/settings" method="post">
+        {{$element}}
+        <input name="_method" type="hidden" value="DELETE">
+        <button name="_method" value="{{$index}}">Delete</button>
+      </form>
+      </dd>
+    {{end}}
     <dd>
       <form action="/settings" method="post">
         <input type="text" name="root">
-        <input type="submit" value="Update">
+        <input type="submit" value="Add">
       </form>
     </dd>
     <dt>Data dir</dt>

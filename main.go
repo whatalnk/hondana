@@ -14,12 +14,14 @@ import (
 
 	"os/user"
 
+	"strconv"
+
 	"rsc.io/pdf"
 )
 
 type Config struct {
-	path string
-	Root string
+	path  string
+	Roots []string
 }
 
 var config Config
@@ -44,7 +46,6 @@ func getConfig() Config {
 		if _, err := f.Write(data); err != nil {
 			log.Fatal(fmt.Sprint("Cannot write settings"), err)
 		}
-
 		return config
 	}
 	f, _ := ioutil.ReadFile(configfile)
@@ -53,6 +54,9 @@ func getConfig() Config {
 	return config
 }
 
+type Library struct {
+	Shelves []Shelf
+}
 
 type Shelf struct {
 	Root  string
@@ -66,7 +70,7 @@ type Book struct {
 	File    string
 }
 
-func visit(fileList *[]Book) filepath.WalkFunc {
+func visit(fileList *[]Book, root string) filepath.WalkFunc {
 	return func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() || filepath.Ext(path) != ".pdf" {
 			return nil
@@ -74,7 +78,7 @@ func visit(fileList *[]Book) filepath.WalkFunc {
 		f, _ := pdf.Open(path)
 		var title, author string
 		var numPage int
-		rel, _ := filepath.Rel(config.Root, path)
+		rel, _ := filepath.Rel(root, path)
 		defer func() {
 			if r := recover(); r != nil {
 				title = filepath.Base(path)
@@ -99,7 +103,7 @@ type templateHandler struct {
 	once     sync.Once
 	filename string
 	templ    *template.Template
-	data     Shelf
+	data     Library
 }
 
 func (t *templateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,18 +126,36 @@ type configHandler struct {
 func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		r.ParseForm()
-		v := r.Form["root"][0]
-		c.config.Root = v
-		data, _ := json.Marshal(c.config)
-		f, err := os.Create(c.config.path)
-		if err != nil {
-			log.Fatal(fmt.Sprintf("Cannot open %s\n", c.config.path), err)
+		log.Println(r)
+		if v, ok := r.Form["root"]; ok {
+			c.config.Roots = append(c.config.Roots, v[0])
+			data, _ := json.Marshal(c.config)
+			f, err := os.Create(c.config.path)
+			if err != nil {
+				log.Fatal(fmt.Sprintf("Cannot open %s\n", c.config.path), err)
+			}
+			if _, err := f.Write(data); err != nil {
+				log.Fatal(fmt.Sprint("Cannot write settings"), err)
+			}
+			defer f.Close()
+			log.Printf("Add Root: %s", v)
+		} else if v, ok := r.Form["_method"]; ok {
+			if v[0] == "DELETE" {
+				i, _ := strconv.Atoi(v[1])
+				tmp := c.config.Roots[i]
+				c.config.Roots = append(c.config.Roots[:i], c.config.Roots[i+1:]...)
+				data, _ := json.Marshal(c.config)
+				f, err := os.Create(c.config.path)
+				if err != nil {
+					log.Fatal(fmt.Sprintf("Cannot open %s\n", c.config.path), err)
+				}
+				if _, err := f.Write(data); err != nil {
+					log.Fatal(fmt.Sprint("Cannot write settings"), err)
+				}
+				defer f.Close()
+				log.Printf("Delet: %s", tmp)
+			}
 		}
-		if _, err := f.Write(data); err != nil {
-			log.Fatal(fmt.Sprint("Cannot write settings"), err)
-		}
-		defer f.Close()
-		log.Printf("Update Root to: %s", v)
 	}
 	c.once.Do(func() {
 		c.templ = template.Must(template.ParseFiles(filepath.Join("templates", c.filename)))
@@ -147,15 +169,20 @@ func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	config = getConfig()
-	fileList := []Book{}
-	if config.Root != "" {
-		err := filepath.Walk(config.Root, visit(&fileList))
-		if err != nil {
-			log.Fatal("filepath.Walk: ", err)
+	var shelves []Shelf
+	var fileList []Book
+	if len(config.Roots) != 0 {
+		for _, v := range config.Roots {
+			err := filepath.Walk(v, visit(&fileList, v))
+			if err != nil {
+				log.Fatal("filepath.Walk: ", err)
+			}
+			shelves = append(shelves, Shelf{Root: v, Books: fileList})
+			fileList = fileList[:0]
 		}
 	}
 	fmt.Println("accepting connections at http://localhost:8080")
-	http.Handle("/", &templateHandler{filename: "index.html", data: Shelf{config.Root, fileList}})
+	http.Handle("/", &templateHandler{filename: "index.html", data: Library{shelves}})
 	http.Handle("/settings", &configHandler{filename: "settings.html", config: config})
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal("ListenAndServe: ", err)
