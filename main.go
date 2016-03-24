@@ -123,37 +123,32 @@ type configHandler struct {
 	config   Config
 }
 
+func (c *Config) updateConfig() {
+	data, _ := json.Marshal(c)
+	f, err := os.Create(c.path)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Cannot open %s\n", c.path), err)
+	}
+	if _, err := f.Write(data); err != nil {
+		log.Fatal(fmt.Sprint("Cannot write settings"), err)
+	}
+	defer f.Close()
+}
+
 func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		r.ParseForm()
-		log.Println(r)
 		if v, ok := r.Form["root"]; ok {
 			c.config.Roots = append(c.config.Roots, v[0])
-			data, _ := json.Marshal(c.config)
-			f, err := os.Create(c.config.path)
-			if err != nil {
-				log.Fatal(fmt.Sprintf("Cannot open %s\n", c.config.path), err)
-			}
-			if _, err := f.Write(data); err != nil {
-				log.Fatal(fmt.Sprint("Cannot write settings"), err)
-			}
-			defer f.Close()
+			c.config.updateConfig()
 			log.Printf("Add Root: %s", v)
 		} else if v, ok := r.Form["_method"]; ok {
 			if v[0] == "DELETE" {
 				i, _ := strconv.Atoi(v[1])
 				tmp := c.config.Roots[i]
 				c.config.Roots = append(c.config.Roots[:i], c.config.Roots[i+1:]...)
-				data, _ := json.Marshal(c.config)
-				f, err := os.Create(c.config.path)
-				if err != nil {
-					log.Fatal(fmt.Sprintf("Cannot open %s\n", c.config.path), err)
-				}
-				if _, err := f.Write(data); err != nil {
-					log.Fatal(fmt.Sprint("Cannot write settings"), err)
-				}
-				defer f.Close()
-				log.Printf("Delet: %s", tmp)
+				c.config.updateConfig()
+				log.Printf("Delete: %s", tmp)
 			}
 		}
 	}
