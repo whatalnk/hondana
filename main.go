@@ -17,8 +17,9 @@ import (
 )
 
 type Config struct {
-	path  string
-	Roots []string
+	path    string
+	Roots   []string
+	DataDir string
 }
 
 var config Config
@@ -35,14 +36,8 @@ func getConfig() Config {
 			}
 		}
 		config.path = configfile
-		f, err := os.Create(configfile)
-		if err != nil {
-			log.Fatal(fmt.Sprintf("Cannot create %s\n", configfile), err)
-		}
-		data, _ := json.Marshal(config)
-		if _, err := f.Write(data); err != nil {
-			log.Fatal(fmt.Sprint("Cannot write settings"), err)
-		}
+		config.DataDir = filepath.ToSlash(configdir)
+		config.updateConfig()
 		return config
 	}
 	f, _ := ioutil.ReadFile(configfile)
@@ -176,6 +171,7 @@ func main() {
 	fmt.Println("accepting connections at http://localhost:8080")
 	http.Handle("/", &templateHandler{filename: "index.html", data: Library{shelves}})
 	http.Handle("/settings", &configHandler{filename: "settings.html", config: config})
+	http.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(config.DataDir))))
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
