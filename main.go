@@ -13,6 +13,9 @@ import (
 	"strconv"
 	"sync"
 
+	"database/sql"
+
+	_ "github.com/mattn/go-sqlite3"
 	"rsc.io/pdf"
 )
 
@@ -154,6 +157,44 @@ func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func dbUpdate(lb Library) {
+	db, err := sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	sqlStmt := `
+	create table books (id integer not null primary key, root text, title text, author text, numPage integer, file text, thumbnail text);
+	`
+	_, err = db.Exec(sqlStmt)
+	if err != nil {
+		log.Printf("%q: %s\n", err, sqlStmt)
+		return
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		log.Fatal(err)
+	}
+	stmt, err := tx.Prepare("insert into books(root, title, author, numPage, file) values(?, ?, ?, ?, ?)")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+	usr, _ := user.Current()
+	home := usr.HomeDir
+	for _, sh := range lb.Shelves {
+		rt, _ := filepath.Rel(home, sh.Root)
+		for _, bk := range sh.Books {
+			_, err = stmt.Exec(rt, bk.Title, bk.Author, bk.NumPage, bk.File)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+	}
+	tx.Commit()
+}
+
 func main() {
 	config = getConfig()
 	var shelves []Shelf
@@ -168,8 +209,10 @@ func main() {
 			fileList = fileList[:0]
 		}
 	}
+	lb := Library{shelves}
+	dbUpdate(lb)
 	fmt.Println("accepting connections at http://localhost:8080")
-	http.Handle("/", &templateHandler{filename: "index.html", data: Library{shelves}})
+	http.Handle("/", &templateHandler{filename: "index.html", data: lb})
 	http.Handle("/settings", &configHandler{filename: "settings.html", config: config})
 	http.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(config.DataDir))))
 	if err := http.ListenAndServe(":8080", nil); err != nil {
