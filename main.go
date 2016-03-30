@@ -133,16 +133,18 @@ func (c *Config) updateConfig() {
 func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		r.ParseForm()
-		if v, ok := r.Form["root"]; ok {
+		if v, ok := r.Form["root"]; ok && v[0] != "" {
 			c.config.Roots = append(c.config.Roots, v[0])
 			c.config.updateConfig()
-			log.Printf("Add Root: %s", v)
+			dbAdd(v[0])
+			log.Printf("Add Root: %s", v[0])
 		} else if v, ok := r.Form["_method"]; ok {
 			if v[0] == "DELETE" {
 				i, _ := strconv.Atoi(v[1])
 				tmp := c.config.Roots[i]
 				c.config.Roots = append(c.config.Roots[:i], c.config.Roots[i+1:]...)
 				c.config.updateConfig()
+				dbDelete(tmp)
 				log.Printf("Delete: %s", tmp)
 			}
 		}
@@ -157,7 +159,7 @@ func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func dbUpdate(lb Library) {
+func dbInit() {
 	db, err := sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
 	if err != nil {
 		log.Fatal(err)
@@ -165,13 +167,24 @@ func dbUpdate(lb Library) {
 	defer db.Close()
 
 	sqlStmt := `
-	create table books (id integer not null primary key, root text, title text, author text, numPage integer, file text, thumbnail text);
+	create table if not exists books (id integer not null primary key, root text, title text, author text, numPage integer, file text, thumbnail text);
 	`
 	_, err = db.Exec(sqlStmt)
 	if err != nil {
 		log.Printf("%q: %s\n", err, sqlStmt)
 		return
 	}
+
+}
+
+func dbAdd(root string) {
+	shelf := createShelf(root)
+	db, err := sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
 	tx, err := db.Begin()
 	if err != nil {
 		log.Fatal(err)
@@ -183,34 +196,67 @@ func dbUpdate(lb Library) {
 	defer stmt.Close()
 	usr, _ := user.Current()
 	home := usr.HomeDir
-	for _, sh := range lb.Shelves {
-		rt, _ := filepath.Rel(home, sh.Root)
-		for _, bk := range sh.Books {
-			_, err = stmt.Exec(rt, bk.Title, bk.Author, bk.NumPage, bk.File)
-			if err != nil {
-				log.Fatal(err)
-			}
+	rt, _ := filepath.Rel(home, shelf.Root)
+	for _, bk := range shelf.Books {
+		_, err = stmt.Exec(rt, bk.Title, bk.Author, bk.NumPage, bk.File)
+		if err != nil {
+			log.Fatal(err)
 		}
 	}
 	tx.Commit()
+	log.Printf("Add to DB: %s", root)
+}
+
+func dbDelete(root string) {
+	db, err := sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	stmt, err := tx.Prepare("delete from books where root = ?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+
+	usr, _ := user.Current()
+	home := usr.HomeDir
+	rt, _ := filepath.Rel(home, root)
+
+	_, err = stmt.Exec(rt)
+	if err != nil {
+		log.Fatal(err)
+	}
+	tx.Commit()
+	log.Printf("Delete from DB: %s", root)
+
+}
+
+func createShelf(root string) Shelf {
+	filelist := []Book{}
+	err := filepath.Walk(root, visit(&filelist, root))
+	if err != nil {
+		log.Fatal("filepath.Walk: ", err)
+	}
+	return Shelf{Root: root, Books: filelist}
 }
 
 func main() {
 	config = getConfig()
 	var shelves []Shelf
-	var fileList []Book
 	if len(config.Roots) != 0 {
 		for _, v := range config.Roots {
-			err := filepath.Walk(v, visit(&fileList, v))
-			if err != nil {
-				log.Fatal("filepath.Walk: ", err)
-			}
-			shelves = append(shelves, Shelf{Root: v, Books: fileList})
-			fileList = fileList[:0]
+			shelves = append(shelves, createShelf(v))
 		}
 	}
+	dbInit()
 	lb := Library{shelves}
-	dbUpdate(lb)
 	fmt.Println("accepting connections at http://localhost:8080")
 	http.Handle("/", &templateHandler{filename: "index.html", data: lb})
 	http.Handle("/settings", &configHandler{filename: "settings.html", config: config})
