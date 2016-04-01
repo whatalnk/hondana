@@ -26,6 +26,9 @@ type Config struct {
 }
 
 var config Config
+var library Library
+
+var db *sql.DB
 
 func getConfig() Config {
 	usr, _ := user.Current()
@@ -98,14 +101,16 @@ type templateHandler struct {
 	once     sync.Once
 	filename string
 	templ    *template.Template
-	data     Library
 }
 
 func (t *templateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		library = dbLoad()
+	}
 	t.once.Do(func() {
 		t.templ = template.Must(template.ParseFiles(filepath.Join("templates", t.filename)))
 	})
-	err := t.templ.Execute(w, t.data)
+	err := t.templ.Execute(w, library)
 	if err != nil {
 		log.Fatal("template.Execute: ", err)
 	}
@@ -115,7 +120,7 @@ type configHandler struct {
 	once     sync.Once
 	filename string
 	templ    *template.Template
-	config   Config
+	config   *Config
 }
 
 func (c *Config) updateConfig() {
@@ -159,32 +164,8 @@ func (c *configHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func dbInit() {
-	db, err := sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	sqlStmt := `
-	create table if not exists books (id integer not null primary key, root text, title text, author text, numPage integer, file text, thumbnail text);
-	`
-	_, err = db.Exec(sqlStmt)
-	if err != nil {
-		log.Printf("%q: %s\n", err, sqlStmt)
-		return
-	}
-
-}
-
 func dbAdd(root string) {
 	shelf := createShelf(root)
-	db, err := sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
 	tx, err := db.Begin()
 	if err != nil {
 		log.Fatal(err)
@@ -208,12 +189,6 @@ func dbAdd(root string) {
 }
 
 func dbDelete(root string) {
-	db, err := sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
 	tx, err := db.Begin()
 	if err != nil {
 		log.Fatal(err)
@@ -238,6 +213,43 @@ func dbDelete(root string) {
 
 }
 
+func dbLoad() Library {
+	tx, err := db.Begin()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	stmt, err := tx.Prepare("select title, author, numPage, file from books where root = ?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+
+	var shelves []Shelf
+	if len(config.Roots) != 0 {
+		usr, _ := user.Current()
+		home := usr.HomeDir
+		for _, v := range config.Roots {
+			rt, _ := filepath.Rel(home, v)
+			rows, err := stmt.Query(rt)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer rows.Close()
+			var books []Book
+			for rows.Next() {
+				var title, author, file string
+				var numPage int
+				rows.Scan(&title, &author, &numPage, &file)
+				books = append(books, Book{title, author, numPage, file})
+			}
+			shelves = append(shelves, Shelf{rt, books})
+		}
+	}
+	tx.Commit()
+	return Library{shelves}
+}
+
 func createShelf(root string) Shelf {
 	filelist := []Book{}
 	err := filepath.Walk(root, visit(&filelist, root))
@@ -249,17 +261,24 @@ func createShelf(root string) Shelf {
 
 func main() {
 	config = getConfig()
-	var shelves []Shelf
-	if len(config.Roots) != 0 {
-		for _, v := range config.Roots {
-			shelves = append(shelves, createShelf(v))
-		}
+	var err error
+	db, err = sql.Open("sqlite3", filepath.Join(config.DataDir, "hondana.db"))
+	if err != nil {
+		log.Fatal(err)
 	}
-	dbInit()
-	lb := Library{shelves}
+	defer db.Close()
+
+	sqlStmt := `
+	create table if not exists books (id integer not null primary key, root text, title text, author text, numPage integer, file text, thumbnail text);
+	`
+	_, err = db.Exec(sqlStmt)
+	if err != nil {
+		log.Printf("%q: %s\n", err, sqlStmt)
+	}
+	db.SetMaxIdleConns(100)
 	fmt.Println("accepting connections at http://localhost:8080")
-	http.Handle("/", &templateHandler{filename: "index.html", data: lb})
-	http.Handle("/settings", &configHandler{filename: "settings.html", config: config})
+	http.Handle("/", &templateHandler{filename: "index.html"})
+	http.Handle("/settings", &configHandler{filename: "settings.html", config: &config})
 	http.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(config.DataDir))))
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal("ListenAndServe: ", err)
