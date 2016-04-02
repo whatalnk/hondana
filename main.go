@@ -250,6 +250,59 @@ func dbLoad() Library {
 	return Library{shelves}
 }
 
+func dbUpdate() {
+	sqlStmt := `
+	create table if not exists temp (id integer not null primary key, root text, title text, author text, numPage integer, file text, thumbnail text);
+  delete from temp;
+	`
+	_, err := db.Exec(sqlStmt)
+	if err != nil {
+		log.Printf("%q: %s\n", err, sqlStmt)
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	stmt, err := tx.Prepare("insert into temp(root, title, author, numPage, file) values(?, ?, ?, ?, ?)")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+
+	usr, _ := user.Current()
+	home := usr.HomeDir
+
+	if len(config.Roots) != 0 {
+		for _, v := range config.Roots {
+			shelf := createShelf(v)
+			rt, _ := filepath.Rel(home, shelf.Root)
+			for _, bk := range shelf.Books {
+				_, err = stmt.Exec(rt, bk.Title, bk.Author, bk.NumPage, bk.File)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+	}
+	tx.Commit()
+
+	// Delete books
+	_, err = db.Exec("delete from books where not exists (select * from temp where 'books.file' = 'temp.file');")
+	if err != nil {
+		log.Printf("%q: %s\n", err, sqlStmt)
+		return
+	}
+	// Add new books
+	_, err = db.Exec("insert into books select * from temp where exists (select * from temp where 'books.file' <> 'temp.file');")
+	if err != nil {
+		log.Printf("%q: %s\n", err, sqlStmt)
+		return
+	}
+}
+
 func createShelf(root string) Shelf {
 	filelist := []Book{}
 	err := filepath.Walk(root, visit(&filelist, root))
@@ -276,6 +329,9 @@ func main() {
 		log.Printf("%q: %s\n", err, sqlStmt)
 	}
 	db.SetMaxIdleConns(100)
+
+	dbUpdate()
+
 	fmt.Println("accepting connections at http://localhost:8080")
 	http.Handle("/", &templateHandler{filename: "index.html"})
 	http.Handle("/settings", &configHandler{filename: "settings.html", config: &config})
