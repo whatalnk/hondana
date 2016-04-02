@@ -290,13 +290,13 @@ func dbUpdate() {
 	tx.Commit()
 
 	// Delete books
-	_, err = db.Exec("delete from books where not exists (select * from temp where 'books.file' = 'temp.file');")
+	_, err = db.Exec("delete from books where not exists (select * from temp where books.file = temp.file);")
 	if err != nil {
 		log.Printf("%q: %s\n", err, sqlStmt)
 		return
 	}
 	// Add new books
-	_, err = db.Exec("insert into books select * from temp where exists (select * from temp where 'books.file' <> 'temp.file');")
+	_, err = db.Exec("insert into books(root, title, author, numPage, file) select root, title, author, numPage, file from temp where not exists (select * from books where books.file = temp.file);")
 	if err != nil {
 		log.Printf("%q: %s\n", err, sqlStmt)
 		return
